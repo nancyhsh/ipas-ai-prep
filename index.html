@@ -190,6 +190,17 @@ button { font-family: inherit; }
 .k-card.flagged { border-color: var(--hot); }
 .k-card.flagged .k-header { background: var(--hot-light); }
 
+/* ─── 名詞卡搜尋（2026-10-01）─── */
+.search-wrap { position:relative; margin-bottom:.7rem; }
+.search-wrap input { width:100%; font-size:1rem; padding:.75rem 2.6rem .75rem .9rem; border:1.5px solid var(--line); border-radius:12px; background:var(--white); color:var(--ink); font-family:inherit; -webkit-appearance:none; appearance:none; }
+.search-wrap input:focus { outline:none; border-color:var(--s1); }
+.search-wrap input::-webkit-search-cancel-button { -webkit-appearance:none; display:none; }
+.search-wrap button { position:absolute; right:.35rem; top:50%; transform:translateY(-50%); width:2.2rem; height:2.2rem; border:none; background:transparent; font-size:1rem; color:var(--sub); cursor:pointer; display:none; }
+.search-wrap.has-text button { display:block; }
+.search-info { font-size:.85rem; color:var(--sub); margin:.1rem 0 .6rem; line-height:1.6; }
+#page-terms.searching .pbar-wrap, #page-terms.searching .chiprow { display:none; }
+.tcard-where { font-family:var(--mono); font-size:.7rem; color:var(--sub); margin-bottom:.3rem; }
+
 /* ─── 概念精讀（2026-10-01）─── */
 .cp-hint { font-size:.8rem; color:var(--sub); line-height:1.6; margin:-.1rem 0 .7rem; }
 .cp-card { background:var(--white); border:1px solid var(--line); border-radius:var(--radius); margin-bottom:.7rem; overflow:hidden; }
@@ -244,6 +255,10 @@ details.sim-old summary { cursor:pointer; font-size:.85rem; color:var(--sub); ma
 
 <!-- ═══ 名詞卡 ═══ -->
 <div class="page active" id="page-terms">
+  <div class="search-wrap">
+    <input id="term-search" type="search" placeholder="🔍 搜尋名詞（中文或英文，例如 SMOTE、召回率）" autocomplete="off" autocapitalize="off" enterkeyhint="search">
+    <button id="term-search-clear" type="button" aria-label="清除搜尋">✕</button>
+  </div>
   <div class="pbar-wrap">
     <div class="pbar-label"><span id="term-prog-label">0 / 0 已標記</span><span id="term-prog-pct">0%</span></div>
     <div class="pbar-bg"><div class="pbar-fill" id="term-prog-fill" style="width:0%"></div></div>
@@ -1317,9 +1332,58 @@ function termStatus(id) {
   return (STATE.termState[id] || {}).status || 'unset';
 }
 
+// 名詞卡搜尋（2026-10-01）：比對英文名、中文名、白話解釋、易混淆提醒、分組名；忽略大小寫、空白、連字號與括號
+let termQuery = '';
+function normQ(s) { return String(s || '').toLowerCase().replace(/[\s\-_.,，、／/()（）·]/g, ''); }
+function termSearchResults(q) {
+  const hits = TERMS.filter(t => normQ([t.en, t.zh, t.note, t.confuse || '', famLabel(t.family)].join(' ')).includes(q));
+  // 名稱本身命中的排前面，其次依「考幾次」
+  hits.sort((a, b) => {
+    const an = normQ(a.en + a.zh).includes(q) ? 0 : 1, bn = normQ(b.en + b.zh).includes(q) ? 0 : 1;
+    return an - bn || b.freq - a.freq;
+  });
+  return hits;
+}
+function renderTermSearch(wrap, q) {
+  const hits = termSearchResults(q);
+  const info = document.createElement('div');
+  info.className = 'search-info';
+  info.textContent = hits.length
+    ? `找到 ${hits.length} 張（搜尋全部科目，已展開解釋）。清除搜尋可回到分組瀏覽。`
+    : '找不到符合的名詞。可以換個說法，例如只輸入英文縮寫或中文關鍵字。';
+  wrap.appendChild(info);
+  hits.forEach(t => {
+    const el = renderTermCard(t);
+    el.querySelector('.tcard-back').classList.add('show');
+    el.insertAdjacentHTML('afterbegin', `<div class="tcard-where">${t.subject === 's1' ? '科目一' : '科目二'}・${famLabel(t.family)}</div>`);
+    wrap.appendChild(el);
+  });
+}
+(function initTermSearch() {
+  const box = document.getElementById('term-search');
+  const clr = document.getElementById('term-search-clear');
+  const wrapEl = box.parentElement;
+  box.addEventListener('input', () => {
+    termQuery = box.value;
+    wrapEl.classList.toggle('has-text', !!box.value);
+    renderTerms();
+  });
+  box.addEventListener('keydown', e => { if (e.key === 'Enter') box.blur(); });
+  clr.addEventListener('click', () => {
+    box.value = ''; termQuery = ''; wrapEl.classList.remove('has-text'); renderTerms(); box.focus();
+  });
+})();
+
 function renderTerms() {
   const wrap = document.getElementById('term-list');
   wrap.innerHTML = '';
+  const nq = normQ(termQuery);
+  document.getElementById('page-terms').classList.toggle('searching', !!nq); // 搜尋時收起進度條與篩選（搜尋不受它們影響）
+  if (nq) {
+    renderTermSearch(wrap, nq);
+    updateHeaderStats();
+    return;
+  }
   let totalMarked = 0, totalInSubj = 0;
   FAMILIES.forEach(fam => {
     const famAll = TERMS.filter(t => t.family === fam && (termSubj === 'all' || t.subject === termSubj));
