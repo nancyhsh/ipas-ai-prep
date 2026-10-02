@@ -190,6 +190,20 @@ button { font-family: inherit; }
 .k-card.flagged { border-color: var(--hot); }
 .k-card.flagged .k-header { background: var(--hot-light); }
 
+/* ─── 我的收藏（2026-10-02）─── */
+.exp-save { margin-top:.6rem; }
+.btn-save { width:100%; padding:.55rem; border-radius:8px; border:1px dashed var(--warn); background:var(--white); color:var(--warn); font-size:.85rem; font-weight:700; cursor:pointer; font-style:normal; }
+.btn-save.on { border-style:solid; background:var(--warn-light); }
+.memo-box { width:100%; min-height:5.5rem; font-family:inherit; font-size:1rem; line-height:1.6; padding:.6rem .7rem; border:1px solid var(--line); border-radius:8px; background:var(--bg); resize:vertical; color:var(--ink); }
+.memo-box.free { min-height:8rem; }
+.memo-box:focus { outline:none; border-color:var(--s1); background:var(--white); }
+.saved-card { background:var(--white); border:1px solid var(--line); border-radius:var(--radius); padding:.85rem .95rem; margin-bottom:.75rem; }
+.saved-q { font-size:.92rem; font-weight:600; line-height:1.65; margin-bottom:.45rem; }
+.saved-ans { font-size:.88rem; font-weight:700; color:var(--pass); margin-bottom:.4rem; line-height:1.6; }
+.saved-exp { font-size:.88rem; line-height:1.75; color:var(--ink2); background:var(--bg); border-left:3px solid var(--pass); border-radius:8px; padding:.6rem .75rem; margin-bottom:.6rem; }
+.saved-actions { display:flex; justify-content:flex-end; margin-top:.5rem; }
+.saved-actions button { padding:.45rem .8rem; border-radius:8px; font-size:.8rem; cursor:pointer; }
+
 /* ─── 名詞卡搜尋（2026-10-01）─── */
 .search-wrap { position:relative; margin-bottom:.7rem; }
 .search-wrap input { width:100%; font-size:1rem; padding:.75rem 2.6rem .75rem .9rem; border:1.5px solid var(--line); border-radius:12px; background:var(--white); color:var(--ink); font-family:inherit; -webkit-appearance:none; appearance:none; }
@@ -340,6 +354,7 @@ details.sim-old summary { cursor:pointer; font-size:.85rem; color:var(--sub); ma
   <div class="chiprow" id="notes-subj-row">
     <div class="chip on" data-f="s1">📗 科目一知識</div>
     <div class="chip" data-f="s2">📙 科目二知識</div>
+    <div class="chip" data-f="saved">⭐ 我的收藏</div>
   </div>
   <div id="notes-s1">
 
@@ -1082,6 +1097,7 @@ details.sim-old summary { cursor:pointer; font-size:.85rem; color:var(--sub); ma
     </div>
   </div>
   </div>
+  <div id="notes-saved" style="display:none"></div>
 </div>
 
 <!-- ═══ 複習 / 同步 ═══ -->
@@ -1144,10 +1160,12 @@ function loadState() {
       const s = JSON.parse(raw);
       s.noteState = s.noteState || {};
       s.conceptState = s.conceptState || {};
+      s.savedNotes = s.savedNotes || {};
+      s.freeNote = s.freeNote || { text: '', ts: 0 };
       return s;
     }
   } catch (e) {}
-  return { termState: {}, qState: {}, examResults: [], noteState: {}, conceptState: {} };
+  return { termState: {}, qState: {}, examResults: [], noteState: {}, conceptState: {}, savedNotes: {}, freeNote: { text: '', ts: 0 } };
 }
 let STATE = loadState();
 function saveState() {
@@ -1241,13 +1259,132 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 // 筆記（沿用舊版 ipas-study_index.html 內容，逐字保留不改寫）
 // ═══════════════════════════════════════════════════
 document.querySelectorAll('#notes-subj-row .chip').forEach(c => {
-  c.addEventListener('click', () => {
-    document.querySelectorAll('#notes-subj-row .chip').forEach(x => x.classList.remove('on'));
-    c.classList.add('on');
-    document.getElementById('notes-s1').style.display = c.dataset.f === 's1' ? 'block' : 'none';
-    document.getElementById('notes-s2').style.display = c.dataset.f === 's2' ? 'block' : 'none';
-  });
+  c.addEventListener('click', () => showNotesView(c.dataset.f));
 });
+function showNotesView(f) {
+  document.querySelectorAll('#notes-subj-row .chip').forEach(x => x.classList.toggle('on', x.dataset.f === f));
+  document.getElementById('notes-s1').style.display = f === 's1' ? 'block' : 'none';
+  document.getElementById('notes-s2').style.display = f === 's2' ? 'block' : 'none';
+  document.getElementById('notes-saved').style.display = f === 'saved' ? 'block' : 'none';
+  if (f === 'saved') renderSaved();
+}
+
+// ═══════════════════════════════════════════════════
+// ⭐ 我的收藏（2026-10-02）：解析一鍵收藏＋每則可寫自己的註記＋一本隨手筆記
+//   savedNotes[qid] = { savedAt, ts, memo, removed }  （取消收藏記 removed＋ts，換裝置同步時才不會被舊紀錄蓋回來）
+//   freeNote = { text, ts }
+//   收藏只存題號，解析內容每次從題庫讀，之後解析若有更正會自動顯示新版
+// ═══════════════════════════════════════════════════
+function isSaved(qid) { const n = STATE.savedNotes[qid]; return !!(n && !n.removed); }
+function savedIds() {
+  return Object.keys(STATE.savedNotes).filter(id => isSaved(id) && Q_BY_ID[id])
+    .sort((a, b) => (STATE.savedNotes[b].savedAt || 0) - (STATE.savedNotes[a].savedAt || 0));
+}
+function saveBtnHtml(qid) {
+  const on = isSaved(qid);
+  return `<button class="btn-save ${on ? 'on' : ''}" data-q="${qid}" onclick="event.stopPropagation(); toggleSaveExp('${qid}')">${on ? '★ 已收藏（到「筆記 › 我的收藏」看）' : '☆ 收藏這則解析'}</button>`;
+}
+function refreshSaveBtns(qid) {
+  document.querySelectorAll(`.btn-save[data-q="${qid}"]`).forEach(b => { b.outerHTML = saveBtnHtml(qid); });
+}
+function updateSavedChip() {
+  const chip = document.querySelector('#notes-subj-row .chip[data-f="saved"]');
+  if (chip) chip.textContent = `⭐ 我的收藏（${savedIds().length}）`;
+}
+function toggleSaveExp(qid) {
+  const prev = STATE.savedNotes[qid] || {};
+  const now = Date.now();
+  if (isSaved(qid)) STATE.savedNotes[qid] = { ...prev, removed: true, ts: now };
+  else STATE.savedNotes[qid] = { memo: prev.memo || '', savedAt: now, ts: now, removed: false };
+  saveState();
+  refreshSaveBtns(qid);
+  updateSavedChip();
+  if (document.getElementById('notes-saved').style.display === 'block') renderSaved();
+  showToast(isSaved(qid) ? '已收藏，到「筆記 › 我的收藏」可以看與寫註記' : '已取消收藏');
+}
+let memoTimer = null;
+function onMemoInput(qid, el) {
+  clearTimeout(memoTimer);
+  memoTimer = setTimeout(() => {
+    const n = STATE.savedNotes[qid];
+    if (!n) return;
+    n.memo = el.value; n.ts = Date.now();
+    saveState();
+  }, 400);
+}
+let freeTimer = null;
+function onFreeNoteInput(el) {
+  clearTimeout(freeTimer);
+  freeTimer = setTimeout(() => {
+    STATE.freeNote = { text: el.value, ts: Date.now() };
+    saveState();
+  }, 400);
+}
+function renderSaved() {
+  const wrap = document.getElementById('notes-saved');
+  const ids = savedIds();
+  updateSavedChip();
+  wrap.innerHTML = `
+    <div class="sync-box">
+      <h4>✏️ 隨手筆記</h4>
+      <p>想到什麼就記在這裡（例如自己的口訣、容易搞混的地方）。打字會自動存，也會跟著同步碼帶到其他裝置。</p>
+      <textarea class="memo-box free" placeholder="在這裡寫筆記…" oninput="onFreeNoteInput(this)"></textarea>
+    </div>
+    <div class="sync-row" style="margin:.2rem 0 .9rem">
+      <button class="btn-primary" onclick="copyAllNotes()">📋 全部複製成文字（備份用）</button>
+    </div>
+    <div class="sec-title">▸ 收藏的解析（${ids.length}）</div>
+    <div id="saved-list"></div>`;
+  wrap.querySelector('.memo-box.free').value = STATE.freeNote.text || '';
+  const list = document.getElementById('saved-list');
+  if (!ids.length) {
+    list.innerHTML = `<div class="empty"><div class="ic">⭐</div>還沒有收藏<br>在任何一題的解析下方按「☆ 收藏這則解析」就會出現在這裡</div>`;
+    return;
+  }
+  ids.forEach(id => {
+    const q = Q_BY_ID[id], n = STATE.savedNotes[id];
+    const el = document.createElement('div');
+    el.className = 'saved-card';
+    el.innerHTML = `
+      <div class="q-meta"><span class="q-num">${q.examLabel} #${q.num}</span><span class="q-badge ${q.subject}">${q.subject === 's1' ? '科目一' : '科目二'}</span></div>
+      <div class="saved-q">${q.q}</div>
+      <div class="saved-ans">答案：${LETTERS[q.ans]}　${q.opts[q.ans]}</div>
+      <div class="saved-exp">${q.exp}</div>
+      <textarea class="memo-box" placeholder="寫下自己的話（選填）…" oninput="onMemoInput('${id}', this)"></textarea>
+      <div class="saved-actions"><button class="btn-ghost" onclick="toggleSaveExp('${id}')">取消收藏</button></div>`;
+    el.querySelector('.memo-box').value = n.memo || '';
+    list.appendChild(el);
+  });
+}
+function notesAsText() {
+  const lines = [`iPAS 初級備考｜我的筆記（匯出：${new Date().toLocaleDateString('sv-SE')}）`, ''];
+  if ((STATE.freeNote.text || '').trim()) lines.push('【隨手筆記】', STATE.freeNote.text.trim(), '');
+  const ids = savedIds();
+  if (ids.length) lines.push(`【收藏的解析】共 ${ids.length} 則`, '');
+  ids.forEach((id, i) => {
+    const q = Q_BY_ID[id], n = STATE.savedNotes[id];
+    const strip = s => String(s).replace(/<[^>]+>/g, '');
+    lines.push(`${i + 1}. ${q.examLabel} #${q.num}（${q.subject === 's1' ? '科目一' : '科目二'}）`, strip(q.q),
+      `答案：${LETTERS[q.ans]}　${strip(q.opts[q.ans])}`, `解析：${strip(q.exp)}`);
+    if ((n.memo || '').trim()) lines.push(`我的註記：${n.memo.trim()}`);
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+function copyAllNotes() {
+  const text = notesAsText();
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    showToast(ok ? '已複製，可以貼到備忘錄或 Obsidian' : '複製失敗，請長按文字自行複製');
+  };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => showToast('已複製，可以貼到備忘錄或 Obsidian'), fallback);
+  } else fallback();
+}
 function toggleK(id) {
   const body = document.getElementById('body-' + id);
   const arr = document.getElementById('arr-' + id);
@@ -1293,10 +1430,7 @@ function goToNoteCard(id) {
   const card = document.getElementById(id);
   if (!card) return;
   const inS2 = document.getElementById('notes-s2').contains(card);
-  document.querySelectorAll('#notes-subj-row .chip').forEach(c => c.classList.remove('on'));
-  document.querySelector(`#notes-subj-row .chip[data-f="${inS2 ? 's2' : 's1'}"]`).classList.add('on');
-  document.getElementById('notes-s1').style.display = inS2 ? 'none' : 'block';
-  document.getElementById('notes-s2').style.display = inS2 ? 'block' : 'none';
+  showNotesView(inS2 ? 's2' : 's1');
   const body = document.getElementById('body-' + id);
   const arr = document.getElementById('arr-' + id);
   if (body && !body.classList.contains('open')) {
@@ -1540,7 +1674,7 @@ function fillConceptBody(c) {
     <div class="cp-sec">▸ 對比整理</div>${rows}
     ${tips ? `<div class="cp-sec">▸ 判斷口訣</div>${tips}` : ''}
     ${traps ? `<div class="cp-sec">▸ 常見陷阱</div>${traps}` : ''}
-    ${c.qids.length ? `<button class="cp-relbtn" onclick="toggleCpRel('${c.id}', this)">📝 做相關原題（${c.qids.length} 題，115 年優先）▶</button><div class="cp-rel" id="cprel-${c.id}" style="display:none"></div>` : ''}`;
+    ${c.qids.length ? `<button class="cp-relbtn" onclick="toggleCpRel('${c.id}', this)">${cpRelLabel(c, false)}</button><div class="cp-rel" id="cprel-${c.id}" style="display:none"></div>` : ''}`;
   body.dataset.filled = '1';
 }
 function toggleCp(id, forceOpen) {
@@ -1572,17 +1706,28 @@ function toggleCpMark(cid, pid, el) {
   const sub = document.getElementById('cpsub-' + cid);
   if (sub) sub.textContent = cpSubText(CONCEPT_BY_ID[cid]);
 }
+function qAnswered(qid) { const s = STATE.qState[qid]; return !!(s && s.selected !== undefined); }
+function cpRelLabel(c, open) {
+  const done = c.qids.filter(qAnswered).length;
+  return `📝 ${open ? '收起' : '做'}相關原題（已做 ${done}／${c.qids.length} 題）${open ? '▲' : '▶'}`;
+}
+// 2026-10-02：每次打開都重新排列——沒作答的排前面（同組內維持 115 年優先），做過的放後面
 function toggleCpRel(id, btn) {
   const box = document.getElementById('cprel-' + id);
   const c = CONCEPT_BY_ID[id];
-  if (!box.dataset.filled) {
-    // 每個概念組用自己的前綴，同一題出現在兩個概念組時 id 才不會重複
-    c.qids.forEach(qid => { const q = Q_BY_ID[qid]; if (q) box.appendChild(renderQCard(q, false, 'cp-' + id)); });
-    box.dataset.filled = '1';
-  }
   const show = box.style.display === 'none';
+  if (show) {
+    box.innerHTML = '';
+    const todo = c.qids.filter(q => !qAnswered(q)), done = c.qids.filter(qAnswered);
+    const addHead = (txt) => { const h = document.createElement('div'); h.className = 'cp-sec'; h.textContent = txt; box.appendChild(h); };
+    // 每個概念組用自己的前綴，同一題出現在兩個概念組時 id 才不會重複
+    const addQ = (qid) => { const q = Q_BY_ID[qid]; if (q) box.appendChild(renderQCard(q, false, 'cp-' + id)); };
+    if (todo.length) { addHead(`▸ 還沒做（${todo.length} 題）`); todo.forEach(addQ); }
+    else addHead('▸ 這組的相關原題都做過了，下面可以再複習一次');
+    if (done.length) { addHead(`▸ 已做過（${done.length} 題）`); done.forEach(addQ); }
+  }
   box.style.display = show ? 'block' : 'none';
-  btn.textContent = `📝 ${show ? '收起' : '做'}相關原題（${c.qids.length} 題，115 年優先）${show ? '▲' : '▶'}`;
+  btn.textContent = cpRelLabel(c, show);
 }
 function goToConcept(id) {
   const c = CONCEPT_BY_ID[id];
@@ -1668,6 +1813,7 @@ function renderQCard(q, examMode, ctx) {
     <div class="q-explain ${q.hasExp ? '' : 'pending'}">
       <div class="exp-label">✦ ${q.hasExp ? '解析' : '解析製作中'}</div>
       <strong>答案：${LETTERS[q.ans]}</strong>。${q.hasExp ? q.exp : '這一批題目的詳細解析還在陸續補上，先記住正確答案即可。'}
+      ${q.hasExp ? `<div class="exp-save">${saveBtnHtml(q.id)}</div>` : ''}
     </div>`;
   if (!examMode && st && st.selected !== undefined) restoreQCardEl(el, q, st.selected);
   return el;
@@ -2034,6 +2180,12 @@ function mergeState(imported) {
     const inc = imported.conceptState[id];
     if (!cur || (inc.ts || 0) > (cur.ts || 0)) STATE.conceptState[id] = inc;
   });
+  Object.keys(imported.savedNotes || {}).forEach(id => {
+    const cur = STATE.savedNotes[id];
+    const inc = imported.savedNotes[id];
+    if (!cur || (inc.ts || 0) > (cur.ts || 0)) STATE.savedNotes[id] = inc;
+  });
+  if (imported.freeNote && (imported.freeNote.ts || 0) > (STATE.freeNote.ts || 0)) STATE.freeNote = imported.freeNote;
   saveState();
 }
 function importSyncCode() {
@@ -2045,7 +2197,8 @@ function importSyncCode() {
     const imported = JSON.parse(json);
     mergeState(imported);
     showToast('匯入成功，已合併學習紀錄');
-    renderTerms(); renderBank(); renderConcepts(); renderSimRandom(); updateHeaderStats();
+    renderTerms(); renderBank(); renderConcepts(); renderSimRandom(); updateHeaderStats(); updateSavedChip();
+    if (document.getElementById('notes-saved').style.display === 'block') renderSaved();
     document.querySelectorAll('.k-card').forEach(c => updateNoteStarUI(c.id));
     document.getElementById('sync-import-box').value = '';
   } catch (e) {
@@ -2054,10 +2207,11 @@ function importSyncCode() {
 }
 function resetAllData() {
   if (!confirm('確定要清除這台裝置上的所有學習紀錄嗎？此動作無法復原。')) return;
-  STATE = { termState: {}, qState: {}, examResults: [], noteState: {}, conceptState: {} };
+  STATE = { termState: {}, qState: {}, examResults: [], noteState: {}, conceptState: {}, savedNotes: {}, freeNote: { text: '', ts: 0 } };
   saveState();
   showToast('已清除所有紀錄');
-  renderTerms(); renderBank(); renderConcepts(); renderSimRandom(); updateHeaderStats(); renderReview();
+  renderTerms(); renderBank(); renderConcepts(); renderSimRandom(); updateHeaderStats(); renderReview(); updateSavedChip();
+  if (document.getElementById('notes-saved').style.display === 'block') renderSaved();
   document.querySelectorAll('.k-card.flagged').forEach(c => c.classList.remove('flagged'));
   document.querySelectorAll('.note-star.on').forEach(s => s.classList.remove('on'));
 }
@@ -2074,6 +2228,7 @@ function init() {
   renderSimPicker();
   checkResumableExam();
   updateHeaderStats();
+  updateSavedChip();
   setInterval(updateHeaderStats, 30000);
   // sync 碼帶在網址上自動匯入（掃 QR/連結時用）
   if (location.hash.startsWith('#sync=')) {
